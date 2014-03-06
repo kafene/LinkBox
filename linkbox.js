@@ -1,41 +1,67 @@
-(function (window, undefined) {
+javascript:(function (window, undefined) {
     var document = window.document;
 
     // Remove any existing boxes
-    [].slice.call(document.querySelectorAll('[id^="linkbox_frame_"]')).forEach(function (frame) {
+    [].forEach.call(document.querySelectorAll('[id^="linkbox_frame_"]'), function (frame) {
         frame.parentNode.removeChild(frame);
     });
 
     var getLinks = function () {
-        var sel = (window.getSelection || document.getSelection)();
+        var selection = window.getSelection ?
+            window.getSelection() :
+            document.getSelection();
         var links = [].slice.call(document.links);
+
         // If selected text, get anchor nodes in it.
-        if (0 !== sel.toString().trim().length) {
+        if (0 !== selection.toString().trim().length) {
             links = links.filter(function (link) {
-                return sel.containsNode(link, false);
+                return selection.containsNode(link, false);
             });
         }
+
         // Strip out trailing junk from href
         links.forEach(function (link) {
             link.href = link.href.replace(/[#?&]*$/, '');
         });
-        // Filter out empty links and duplicates
-        links = links.filter(function (a, b, links) {
-            var isDupe = links.lastIndexOf(a.href) == b.href;
-            var isEmpty = ('' == a.href.trim());
-            return !isDupe && !isEmpty;
+
+        // Filter out empty links and links to anchors
+        links = links.filter(function (link) {
+            return '' !== link.href && !/^#/.test(link.href);
         });
+
+        // Remove duplicates
+        var hrefs = links.map(function (link) { return link.href; });
+        links = links.reverse().filter(function (link, i, links) {
+            return hrefs.indexOf(link.href, i + 1) === -1;
+        }).reverse();
+
         return links;
     };
 
     var getElementText = function (el) {
         var tc = el.textContent.trim();
-        if (0 != tc.length) { return tc; }
-        if (el.title) { return el.title; }
-        if (el.alt) { return el.alt; }
-        var par = el.parentNode;
-        if (par && par.title) { return par.title; }
-        if (par && par.alt) { return par.alt; }
+
+        if (0 != tc.length) {
+            return tc;
+        }
+
+        if (el.title) {
+            return el.title;
+        }
+
+        if (el.alt) {
+            return el.alt;
+        }
+
+        var parent = el.parentNode;
+        if (parent && parent.title) {
+            return parent.title;
+        }
+
+        if (parent && parent.alt) {
+            return parent.alt;
+        }
+
         return '';
     };
 
@@ -50,33 +76,83 @@
         return null;
     }
 
-    box.css = '*{box-sizing:border-box !important;}'+
-        'body,html{height:100%;width:100%;padding:0;margin:0;}'+
-        '#linkbox_table'+',ol{font:normal 13px/115% monospace}'+
-        'body{'+
-            'overflow:scroll;white-space:nowrap;text-align:left;'+
-            'color:#900;padding:1em;}'+
-        '#linkbox_close_button{'+
-            'color:#fee;background-color:#cd5c5c;display:inline-block;'+
-            'position:absolute;top:3px;right:3px;border:1px solid #fcc;'+
-            'border-radius:3px;padding:0 3px;font:700 14px/100% monospace;'+
-            'cursor:pointer;}'+
-        'button{font:700 13px/115% sans-serif;text-align:left;cursor:pointer;}'+
-        '#linkbox_textarea{width:100%;height:100%;}'+
-        '#linkbox_table,#linkbox_table td{width:100%;vertical-align:top;}'+
-        '#linkbox_table,#linkbox_link_container{height:100%;}';
+    box.css = '\
+        * {\
+            box-sizing: border-box !important;\
+        }\
+        body, html {\
+            height: 100%;\
+            width: 100%;\
+            padding: 0;\
+            margin: 0;\
+        }\
+        #linkbox_table,ol {\
+            font: normal 13px/115% monospace;\
+        }\
+        body {\
+            overflow: scroll;\
+            white-space: nowrap;\
+            text-align: left;\
+            color: #900;\
+            padding: 1em;\
+        }\
+        #linkbox_close_button {\
+            color: #fee;\
+            background-color: #cd5c5c;\
+            display: inline-block;\
+            position: absolute;\
+            top: 3px;\
+            right: 3px;\
+            border: 1px solid #fcc;\
+            border-radius: 3px;\
+            padding: 0 3px;\
+            font: 700 14px/100% monospace;\
+            cursor: pointer;\
+        }\
+        button {\
+            font: 700 13px/115% sans-serif;\
+            text-align: left;\
+            cursor: pointer;\
+        }\
+        #linkbox_textarea {\
+            width: 100%;\
+            height: 100%;\
+        }\
+        #linkbox_table,#linkbox_table td {\
+            width: 100%;\
+            vertical-align: top;\
+        }\
+        #linkbox_table,#linkbox_link_container {\
+            height: 100%;\
+        }\
+    ';
 
     box.injectFrame = function () {
         box.frame = document.createElement('iframe');
         box.frame.id = 'linkbox_frame_' + window.Math.random().toString(36).substring(2);
-        box.frame.style.cssText = (
-            'display:block;position:fixed;top:10px;left:10px;height:90%;' +
-            'width:' + window.Math.min(parseInt(document.documentElement.clientWidth * 0.5, 10), 600) + 'px;' +
-            'border:3px double #000;border-radius:5px;background-color:#fff;' +
-            'padding:1em;margin:0;z-index:999999999;opacity:0.9;' +
-            'overflow-x:auto;overflow-y:auto;visibility:visible;' +
-            'white-space:nowrap;padding:0;margin:0;'
-        ).replace(';', ' !important;');
+
+        box.frame.style.cssText = ('\
+            display: block;\
+            position: fixed;\
+            top: 10px;\
+            left: 10px;\
+            height: 90%;\
+            width: ' + window.Math.min(parseInt(document.documentElement.clientWidth * 0.5, 10), 600) + 'px;\
+            border: 3px double #000;\
+            border-radius: 5px;\
+            background-color: #fff;\
+            padding: 1em;\
+            margin: 0;\
+            z-index: 999999999;\
+            opacity: 0.9;\
+            overflow-x: auto;\
+            overflow-y: auto;\
+            visibility: visible;\
+            white-space: nowrap;\
+            padding: 0;\
+            margin: 0;\
+        ').replace(';', ' !important;');
+
         box.frame.addEventListener('load', function () {
             box.document = box.frame.contentDocument;
             box.injectTemplate();
@@ -84,8 +160,12 @@
             box.document.addEventListener('toggleLinkContainerType', box.toggleLinkContainerType);
             box.setContent(box.createLinkList());
         });
-        // gibs muh dat contentDocument and onload
-        (document.body || document.documentElement).appendChild(box.frame);
+
+        if (document.body) {
+            document.body.appendChild(box.frame);
+        } else {
+            document.documentElement.appendChild(box.frame);
+        }
     };
 
     // template
@@ -148,10 +228,12 @@
     box.createLinkTextarea = function () {
         var existing = box.document.getElementById('linkbox_textarea');
         existing && existing.parentNode.removeChild(existing);
+
         // <textarea id="linkbox_textarea"></textarea>
         var textarea = box.document.createElement('textarea');
         textarea.id = 'linkbox_textarea';
         textarea.textContent = '';
+
         box.links.forEach(function (link) {
             switch(box.linkDisplayMode) {
                 case 'href':
@@ -168,14 +250,18 @@
     box.createLinkList = function () {
         var existing = box.document.getElementById('linkbox_list');
         existing && existing.parentNode.removeChild(existing);
+
         // <ol id="linkbox_list">(<li></li>)+</ol>
         var list = box.document.createElement('ol');
         list.id = 'linkbox_list';
+
         box.links.forEach(function (link) {
             var li = box.document.createElement('li');
             var a = box.document.createElement('a');
+
             a.href = link.href;
             a.title = link.textContent.trim() || link.href;
+
             switch (box.linkDisplayMode) {
                 case 'href':
                     a.textContent = a.title;
@@ -184,6 +270,7 @@
                     a.textContent = a.href;
                     break;
             }
+
             li.appendChild(a);
             list.appendChild(li);
         });
@@ -192,8 +279,12 @@
 
     box.emptyLinkContainer = function () {
         var linkContainer = box.document.getElementById('linkbox_link_container');
-        if (!linkContainer) { return null; };
-        [].slice.call(linkContainer.querySelectorAll('*')).forEach(function (el) {
+
+        if (!linkContainer) {
+            return null;
+        };
+
+        [].forEach.call(linkContainer.querySelectorAll('*'), function (el) {
             el.parentNode.removeChild(el);
         });
     };
@@ -216,13 +307,17 @@
 
     // invert
     box.toggleLinkContainerType = function () {
-        box.linkContainerType = (box.linkContainerType == 'list') ? 'textarea' : 'list';
+        box.linkContainerType = (box.linkContainerType == 'list') ?
+            'textarea' :
+            'list';
         box.renderLinkContainer();
     };
 
     // invert
     box.toggleLinkDisplayMode = function () {
-        box.linkDisplayMode = (box.linkDisplayMode == 'title') ? 'href' : 'title';
+        box.linkDisplayMode = (box.linkDisplayMode == 'title') ?
+            'href' :
+            'title';
         box.renderLinkContainer();
     };
 
