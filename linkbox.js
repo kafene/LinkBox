@@ -1,328 +1,193 @@
-javascript:(function (window, undefined) {
-    var document = window.document;
-
-    // Remove any existing boxes
-    [].forEach.call(document.querySelectorAll('[id^="linkbox_frame_"]'), function (frame) {
+javascript:(function () {
+    /* remove any existing iframes */
+    [].forEach.call(document.querySelectorAll('[id^=linkbox_frame_]'), function (frame) {
         frame.parentNode.removeChild(frame);
     });
 
-    var getLinks = function () {
-        var selection = window.getSelection ?
-            window.getSelection() :
-            document.getSelection();
+    /* links from selected text, or if none, all links in document. */
+    var links = (function () {
+        var selection = (window.getSelection || document.getSelection).call();
         var links = [].slice.call(document.links);
 
-        // If selected text, get anchor nodes in it.
-        if (0 !== selection.toString().trim().length) {
-            links = links.filter(function (link) {
-                return selection.containsNode(link, false);
+        if (selection.toString().trim().length > 0) {
+            links = links.filter(function (a) {
+                return selection.containsNode(a, true);
             });
         }
 
-        // Strip out trailing junk from href
-        links.forEach(function (link) {
-            link.href = link.href.replace(/[#?&]*$/, '');
+        /* convert to an array, nullify ones without an href or empty href */
+        links = links.map(function (a) {
+            var text = (a.text||a.textContent||a.innerText).trim();
+            return a.href ? {
+                href: a.href.trim(),
+                title: (text||a.title||a.parentNode.title||a.parentNode.alt||''),
+                text: text,
+                id: a.id,
+            } : null;
         });
 
-        // Filter out empty links and links to anchors
-        links = links.filter(function (link) {
-            return '' !== link.href && !/^#/.test(link.href);
-        });
+        /* filter out nullified/empty links. */
+        links = links.filter(function (a) { return a && a.href; });
 
-        // Remove duplicates
-        var hrefs = links.map(function (link) { return link.href; });
-        links = links.reverse().filter(function (link, i, links) {
-            return hrefs.indexOf(link.href, i + 1) === -1;
+        /* Remove duplicates */
+        var hrefs = links.map(function (a) { return a.href; });
+
+        links = links.reverse().filter(function (a, i) {
+            return hrefs.indexOf(a.href, i + 1) === -1;
         }).reverse();
 
         return links;
-    };
+    })();
 
-    var getElementText = function (el) {
-        var tc = el.textContent.trim();
-
-        if (0 != tc.length) {
-            return tc;
-        }
-
-        if (el.title) {
-            return el.title;
-        }
-
-        if (el.alt) {
-            return el.alt;
-        }
-
-        var parent = el.parentNode;
-        if (parent && parent.title) {
-            return parent.title;
-        }
-
-        if (parent && parent.alt) {
-            return parent.alt;
-        }
-
-        return '';
-    };
-
-    var box = {};
-    box.linkDisplayMode = 'title'; // title or href
-    box.linkContainerType = 'list'; // textarea or list
-    box.links = getLinks();
-
-    // If there are no links in the document, no point to create the box.
-    if (0 == box.links.length) {
+    /* No need to go any further... */
+    if (0 === links.length) {
         window.alert('No links found.');
         return null;
     }
 
-    box.css = '\
-        * {\
-            box-sizing: border-box !important;\
-        }\
-        body, html {\
-            height: 100%;\
-            width: 100%;\
-            padding: 0;\
-            margin: 0;\
-        }\
-        #linkbox_table,ol {\
-            font: normal 13px/115% monospace;\
-        }\
-        body {\
-            overflow: scroll;\
-            white-space: nowrap;\
-            text-align: left;\
-            color: #900;\
-            padding: 1em;\
-        }\
-        #linkbox_close_button {\
-            color: #fee;\
-            background-color: #cd5c5c;\
-            display: inline-block;\
-            position: absolute;\
-            top: 3px;\
-            right: 3px;\
-            border: 1px solid #fcc;\
-            border-radius: 3px;\
-            padding: 0 3px;\
-            font: 700 14px/100% monospace;\
-            cursor: pointer;\
-        }\
-        button {\
-            font: 700 13px/115% sans-serif;\
-            text-align: left;\
-            cursor: pointer;\
-        }\
-        #linkbox_textarea {\
-            width: 100%;\
-            height: 100%;\
-        }\
-        #linkbox_table,#linkbox_table td {\
-            width: 100%;\
-            vertical-align: top;\
-        }\
-        #linkbox_table,#linkbox_link_container {\
-            height: 100%;\
-        }\
-    ';
+    /* the iframe */
+    var iframe;
 
-    box.injectFrame = function () {
-        box.frame = document.createElement('iframe');
-        box.frame.id = 'linkbox_frame_' + window.Math.random().toString(36).substring(2);
+    /* the iframe document */
+    var ifdoc;
 
-        box.frame.style.cssText = ('\
-            display: block;\
-            position: fixed;\
-            top: 10px;\
-            left: 10px;\
-            height: 90%;\
-            width: ' + window.Math.min(parseInt(document.documentElement.clientWidth * 0.5, 10), 600) + 'px;\
-            border: 3px double #000;\
-            border-radius: 5px;\
-            background-color: #fff;\
-            padding: 1em;\
-            margin: 0;\
-            z-index: 999999999;\
-            opacity: 0.9;\
-            overflow-x: auto;\
-            overflow-y: auto;\
-            visibility: visible;\
-            white-space: nowrap;\
-            padding: 0;\
-            margin: 0;\
-        ').replace(';', ' !important;');
+    /* display mode (title,href) */
+    var dm = 'href';
 
-        box.frame.addEventListener('load', function () {
-            box.document = box.frame.contentDocument;
-            box.injectTemplate();
-            box.document.addEventListener('toggleLinkDisplayMode', box.toggleLinkDisplayMode);
-            box.document.addEventListener('toggleLinkContainerType', box.toggleLinkContainerType);
-            box.setContent(box.createLinkList());
-        });
+    /* container type (list,textarea) */
+    var ct = 'list';
 
-        if (document.body) {
-            document.body.appendChild(box.frame);
-        } else {
-            document.documentElement.appendChild(box.frame);
-        }
+    /* toggle the container type */
+    var togglect = function () {
+        ct = (ct === 'list') ? 'textarea' : 'list';
+        renderLinkContainer();
     };
 
-    // template
-    box.injectTemplate = function () {
-        // replace [[  \\*$  ]] => [[  \\  ]]
-        var style = box.document.createElement('style');
-        style.type = 'text/css';
-        style.appendChild(box.document.createTextNode(box.css));
-        box.document.head.appendChild(style);
-
-        // Button to close frame
-        // <div id="linkbox_close_button"></div>
-        var closeButton = box.document.createElement('div');
-        closeButton.id = 'linkbox_close_button';
-        closeButton.innerHTML = '&times;';
-        closeButton.addEventListener('click', function (e) {
-            e.preventDefault && e.preventDefault();
-            box.frame.parentNode.removeChild(box.frame);
-        });
-
-        // button to toggle display mode
-        // <tr><td id="dm_toggle"><button></button></td></tr>
-        var toggleDmRow = box.document.createElement('tr');
-        var toggleDmTd = box.document.createElement('td');
-        var toggleDmButton = box.document.createElement('button');
-        toggleDmTd.id = 'dm_toggle';
-        toggleDmButton.textContent = 'Toggle links (title <=> href)';
-        toggleDmButton.addEventListener('click', box.toggleLinkDisplayMode);
-        toggleDmTd.appendChild(toggleDmButton);
-        toggleDmRow.appendChild(toggleDmTd);
-
-        // button to toggle container type
-        // <tr><td id="ct_toggle"><button></button></td></tr>
-        var toggleCtRow = box.document.createElement('tr');
-        var toggleCtTd = box.document.createElement('td');
-        var toggleCtButton = box.document.createElement('button');
-        toggleCtTd.id = 'ct_toggle';
-        toggleCtButton.textContent = 'Toggle content (list <=> textarea)';
-        toggleCtButton.addEventListener('click', box.toggleLinkContainerType);
-        toggleCtTd.appendChild(toggleCtButton);
-        toggleCtRow.appendChild(toggleCtTd);
-
-        // <tr><td id="linkbox_link_container"></td></tr>
-        var contentRow = box.document.createElement('tr');
-        var contentTd = box.document.createElement('td');
-        contentTd.id = 'linkbox_link_container';
-        contentRow.appendChild(contentTd);
-
-        // <table></table>
-        var table = box.document.createElement('table');
-        table.id = 'linkbox_table';
-        table.appendChild(toggleDmRow);
-        table.appendChild(toggleCtRow);
-        table.appendChild(contentRow);
-
-        box.document.body.appendChild(closeButton);
-        box.document.body.appendChild(table);
+    /* toggle the display mode */
+    var toggledm = function () {
+        dm = (dm === 'title') ? 'href' : 'title';
+        renderLinkContainer();
     };
 
-    box.createLinkTextarea = function () {
-        var existing = box.document.getElementById('linkbox_textarea');
-        existing && existing.parentNode.removeChild(existing);
-
-        // <textarea id="linkbox_textarea"></textarea>
-        var textarea = box.document.createElement('textarea');
-        textarea.id = 'linkbox_textarea';
-        textarea.textContent = '';
-
-        box.links.forEach(function (link) {
-            switch(box.linkDisplayMode) {
-                case 'href':
-                    textarea.textContent += link.href + "\n";
-                    break;
-                case 'title':
-                    textarea.textContent += '- [' + link.title + '](' + link.href + ')' + "\n";
-                    break;
-            }
-        });
-        return textarea;
+    /*  */
+    var renderLinkContainer = function () {
+        setContainerContent((ct === 'textarea') ? createTextarea() : createList());
     };
 
-    box.createLinkList = function () {
-        var existing = box.document.getElementById('linkbox_list');
-        existing && existing.parentNode.removeChild(existing);
+    /*  */
+    var setContainerContent = function (node) {
+        emptyContainer();
+        ifdoc.getElementById('container').appendChild(node);
+    };
 
-        // <ol id="linkbox_list">(<li></li>)+</ol>
-        var list = box.document.createElement('ol');
+    /*  */
+    var emptyContainer = function () {
+        var c = ifdoc.getElementById('container');
+        c && [].forEach.call(c.querySelectorAll('*'), function (node) {
+            node.parentNode.removeChild(node);
+        });
+    };
+
+    /*  */
+    var createTextarea = function () {
+        var ta = ifdoc.getElementById('lb_textarea');
+        ta && ta.parentNode.removeChild(ta);
+        ta = ifdoc.createElement('textarea');
+        ta.id = 'lb_textarea';
+        ta.textContent = '';
+        links.forEach(function (link) {
+            ta.textContent += (dm === 'href') ? link.href+'\n' : '- ['+link.title+']('+link.href+')\n';
+        });
+        return ta;
+    };
+
+    /*  */
+    var createList = function () {
+        var list = ifdoc.getElementById('linkbox_list');
+        list && list.parentNode.removeChild(list);
+        list = ifdoc.createElement('ol');
         list.id = 'linkbox_list';
-
-        box.links.forEach(function (link) {
-            var li = box.document.createElement('li');
-            var a = box.document.createElement('a');
-
+        links.forEach(function (link) {
+            var li = ifdoc.createElement('li');
+            var a = ifdoc.createElement('a');
             a.href = link.href;
-            a.title = link.textContent.trim() || link.href;
-
-            switch (box.linkDisplayMode) {
-                case 'href':
-                    a.textContent = a.title;
-                    break;
-                case 'title':
-                    a.textContent = a.href;
-                    break;
-            }
-
+            a.title = link.text || link.href;
+            a.textContent = (dm === 'href') ? a.href : a.title;
             li.appendChild(a);
             list.appendChild(li);
         });
         return list;
     };
 
-    box.emptyLinkContainer = function () {
-        var linkContainer = box.document.getElementById('linkbox_link_container');
+    /* CSS injected into the iframe document */
+    var ifdoccss = [
+        ['*',['box-sizing:border-box !important']],
+        ['body,html',['height:100%','width:100%','padding:0','margin:0']],
+        ['body', ['display:flex','flex-direction:column',
+            'overflow:scroll','white-space:nowrap','color:#900','padding:1em'
+        ]],
+        ['#xbtn',['color:#fee','background-color:#cd5c5c',
+            'display:inline-block','position:absolute','top:3px','right:3px',
+            'border:1px solid #fcc','border-radius:3px','padding:0 3px',
+            'font:700 14px/100% monospace','cursor:pointer',
+        ]],
+        ['button',['font:700 13px/115% sans-serif','text-align:left','cursor:pointer']],
+        ['ol',['font:normal 13px/115% monospace','margin-top:0']],
+        ['textarea',['width:100%']],
+        ['#container',['flex:1','display:flex','margin-top:0.5em']],
+    ].map(function (a) {return a[0]+' {'+a[1].join(';')+'}\n'}).join('');
 
-        if (!linkContainer) {
-            return null;
-        };
+    /* CSS applied to the iframe in its parent document */
+    var ifcss = [
+        'display:block','position:fixed','top:10px','left:10px','height:90%',
+        'width:'+Math.max(parseInt(document.documentElement.clientWidth*0.65,10),600)+'px',
+        'border:3px double #000','border-radius:5px','background-color:#fff',
+        'padding:1em','margin:0','z-index:999999999','opacity:0.9',
+        'overflow-x:auto','overflow-y:auto','visibility:visible',
+        'white-space:nowrap','padding:0','margin:0',
+    ].join(' !important;')+' !important;';
 
-        [].forEach.call(linkContainer.querySelectorAll('*'), function (el) {
-            el.parentNode.removeChild(el);
+    /* inject the iframe, set ifdoc, and ... go! */
+    iframe = document.createElement('iframe');
+    iframe.id = 'linkbox_frame_' + Math.random().toString(36).substring(2);
+    iframe.style.cssText = ifcss;
+    iframe.addEventListener('load', function () {
+        ifdoc = iframe.contentDocument;
+        ifdoc.addEventListener('toggleDisplayMode', toggledm);
+        ifdoc.addEventListener('toggleContainerType', togglect);
+
+        var style = ifdoc.createElement('style');
+        style.type = 'text/css';
+        style.appendChild(ifdoc.createTextNode(ifdoccss));
+
+        var xbtn = ifdoc.createElement('div');
+        xbtn.id = 'xbtn';
+        xbtn.innerHTML = '&times';
+        xbtn.addEventListener('click', function (e) {
+            e.preventDefault();
+            iframe.parentNode.removeChild(iframe);
         });
-    };
 
-    box.setContent = function (el) {
-        box.emptyLinkContainer();
-        box.document.getElementById('linkbox_link_container').appendChild(el);
-    };
+        var div1 = ifdoc.createElement('div');
+        var div2 = ifdoc.createElement('div');
+        var div3 = ifdoc.createElement('div');
+        var btn1 = ifdoc.createElement('button');
+        var btn2 = ifdoc.createElement('button');
+        div3.id = 'container';
+        btn1.textContent = 'Toggle display mode (title <=> href)';
+        btn2.textContent = 'Toggle container type (list <=> textarea)';
+        btn1.addEventListener('click', toggledm);
+        btn2.addEventListener('click', togglect);
+        div1.appendChild(btn1);
+        div2.appendChild(btn2);
+        ifdoc.head.appendChild(style);
+        ifdoc.body.appendChild(xbtn);
+        ifdoc.body.appendChild(div1);
+        ifdoc.body.appendChild(div2);
+        ifdoc.body.appendChild(div3);
 
-    box.renderLinkContainer = function () {
-        switch (box.linkContainerType) {
-            case 'textarea':
-                box.setContent(box.createLinkTextarea());
-                break;
-            case 'list':
-                box.setContent(box.createLinkList());
-                break;
-        }
-    };
+        setContainerContent(createList());
+    });
 
-    // invert
-    box.toggleLinkContainerType = function () {
-        box.linkContainerType = (box.linkContainerType == 'list') ?
-            'textarea' :
-            'list';
-        box.renderLinkContainer();
-    };
-
-    // invert
-    box.toggleLinkDisplayMode = function () {
-        box.linkDisplayMode = (box.linkDisplayMode == 'title') ?
-            'href' :
-            'title';
-        box.renderLinkContainer();
-    };
-
-    // Inject the frame when the document is done loading.
-    (function r(f) {
-        /in/i.test(document.readyState) ? window.setTimeout(r, 9, f) : f();
-    })(box.injectFrame);
-})(window);
+    (document.body||document.documentElement).appendChild(iframe);
+})();
