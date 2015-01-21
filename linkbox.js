@@ -1,193 +1,471 @@
 javascript:(function () {
-    /* remove any existing iframes */
-    [].forEach.call(document.querySelectorAll('[id^=linkbox_frame_]'), function (frame) {
-        frame.parentNode.removeChild(frame);
-    });
+    "use strict";
 
-    /* links from selected text, or if none, all links in document. */
-    var links = (function () {
-        var selection = (window.getSelection || document.getSelection).call();
-        var links = [].slice.call(document.links);
+    var Linkbox = (function () {
+        var plainLinkRegex = /(\b(?:https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+        var blacklistRegex = /^(mailto|javascript)\:/i;
+        var filterGeneric = function (v) { return !!v; };
+        var slice = Array.prototype.slice;
 
-        if (selection.toString().trim().length > 0) {
-            links = links.filter(function (a) {
-                return selection.containsNode(a, true);
+        var dash = function (v) {
+            return v.replace(/([A-Z])/g, "-$1").toLowerCase();
+        };
+
+        var createElement = function (type, props, doc) {
+            doc = doc || document;
+            var elem = doc.createElement(type);
+
+            Object.keys(props).forEach(function (name) {
+                if (name === "text") {
+                    elem.appendChild(doc.createTextNode(props[name]));
+                }
+                else if (name === "html") {
+                    elem.innerHTML = props[name];
+                }
+                else if (name === "events") {
+                    Object.keys(props[name]).forEach(function (key) {
+                        elem.addEventListener(key, props[name][key]);
+                    });
+                }
+                else if (name === "children") {
+                    props[name].forEach(function (child) {
+                        elem.appendChild(child);
+                    });
+                }
+                else if (name === "style") {
+                    elem.style.cssText = cssifyRule(props[name]);
+                }
+                else if (name === "cssText") {
+                    elem.style.cssText = props[name];
+                }
+                else if (name === "parent") {
+                    props[name].appendChild(elem);
+                }
+                else if (name in elem) {
+                    elem[name] = props[name];
+                }
+                else {
+                    elem.setAttribute(name, props[name]);
+                }
             });
+
+            return elem;
+        };
+
+        var removeChildren = function (selector, doc) {
+            var element = (doc || document).querySelector(selector);
+            if (element) {
+                while (element.hasChildNodes()) {
+                    element.removeChild(element.lastChild);
+                }
+            }
+        };
+
+        var removeElement = function (selector, doc) {
+            var element = (doc || document).querySelector(selector);
+            if (element) {
+                element.parentNode.removeChild(element);
+            }
+        };
+
+        var removeElements = function (selector, doc) {
+            var elements = (doc || document).querySelectorAll(selector);
+            toArray(elements).forEach(function (element) {
+                element.parentNode.removeChild(element);
+            });
+        };
+
+        var toArray = function (obj) {
+            return slice.call(obj);
+        };
+
+        var getRandom = function () {
+            return Math.random().toString(36).substring(2);
+        };
+
+        var cssifyRule = function (rule) {
+            return Object.keys(rule).map(function (key) {
+                return dash(key) + ": " + rule[key];
+            }).join("; ") + ";";
+        };
+
+        var cssifyRuleset = function (obj) {
+            return Object.keys(obj).map(function (selector) {
+                return selector + " { " + cssifyRule(obj[selector]) + " }";
+            }).join("\n");
+        };
+
+        var unique = function (array) {
+            return array.reverse().filter(function (e, i, arr) {
+                return arr.indexOf(e, i + 1) === -1;
+            }).reverse();
+        };
+
+        var objectProperty = function (name, obj) {
+            return obj[name];
+        };
+
+        var curry = function (f) {
+            return function (a) {
+                return function (b) {
+                    return f(a, b);
+                };
+            };
+        };
+
+        function Linkbox () {
+            this.setup();
         }
 
-        /* convert to an array, nullify ones without an href or empty href */
-        links = links.map(function (a) {
-            var text = (a.text||a.textContent||a.innerText).trim();
-            return a.href ? {
-                href: a.href.trim(),
-                title: (text||a.title||a.parentNode.title||a.parentNode.alt||''),
-                text: text,
-                id: a.id,
-            } : null;
+        Linkbox.DISPLAY_MODE_TITLE = "title";
+        Linkbox.DISPLAY_MODE_HREF = "href";
+        Linkbox.CONTAINER_TYPE_LIST = "list";
+        Linkbox.CONTAINER_TYPE_TEXTAREA = "textarea";
+
+        Linkbox.IFRAME_DOCUMENT_CSS = cssifyRuleset({
+            "*": {
+                boxSizing: "border-box !important",
+            },
+            "body, html": {
+                height: "100%",
+                width: "100%",
+                padding: "0",
+                margin: "0",
+            },
+            "body": {
+                display: "flex",
+                flexDirection: "column",
+                overflow: "scroll",
+                whiteSpace: "nowrap",
+                color: "#900",
+                padding: "1em",
+            },
+            "#close-button": {
+                color: "#fee",
+                backgroundColor: "#cd5c5c",
+                display: "inline-block",
+                position: "fixed",
+                top: "3px",
+                right: "3px",
+                border: "1px solid #fcc",
+                cursor: "pointer",
+                borderRadius: "3px",
+                padding: "0 3px",
+                margin: "0",
+                font: "700 14px/100% monospace",
+            },
+            "button": {
+                font: "700 13px/115% sans-serif",
+                textAlign: "left",
+                cursor: "pointer",
+            },
+            "ol": {
+                font: "normal 13px/115% monospace",
+                marginTop: "0",
+            },
+            "textarea": {
+                width: "100%",
+            },
+            "#linkbox-container": {
+                flex: "1",
+                display: "flex",
+                marginTop: "0.5em",
+            },
         });
 
-        /* filter out nullified/empty links. */
-        links = links.filter(function (a) { return a && a.href; });
+        Linkbox.prototype.setup = function () {
+            this.displayMode = Linkbox.DISPLAY_MODE_TITLE;
+            this.containerType = Linkbox.CONTAINER_TYPE_LIST;
+            this.iframeDocument = null;
+            this.links = this.getLinks();
 
-        /* Remove duplicates */
-        var hrefs = links.map(function (a) { return a.href; });
+            var self = this;
+            var clientWidth = document.documentElement.clientWidth;
+            var iframeWidth = Math.max(parseInt(clientWidth * 0.45, 10), 450);
 
-        links = links.reverse().filter(function (a, i) {
-            return hrefs.indexOf(a.href, i + 1) === -1;
-        }).reverse();
+            this.iframe = createElement("iframe", {
+                id: "linkbox-iframe-" + getRandom(),
+                cssText: cssifyRule({
+                    display: "block !important",
+                    position: "fixed !important",
+                    top: "10px !important",
+                    left: "10px !important",
+                    height: "90% !important",
+                    width: iframeWidth + "px !important",
+                    border: "3px double #000 !important",
+                    borderRadius: "5px !important",
+                    backgroundColor: "#fff !important",
+                    padding: "0 !important",
+                    margin: "0 !important",
+                    zIndex: "999999999 !important",
+                    opacity: "0.9 !important",
+                    overflowX: "auto !important",
+                    overflowY: "auto !important",
+                    visibility: "visible !important",
+                    whiteSpace: "nowrap !important",
+                }),
+                events: {load: this.onIframeLoaded.bind(this)},
+            });
+        };
 
-        return links;
+        Linkbox.prototype.linkInfo = function (link) {
+            if (link.href) {
+                var text = (link.text || link.textContent || link.innerText || "").trim();
+                var parent = (link.parentNode || {});
+                var title = (text || link.title || parent.title || parent.alt || "").trim();
+
+                text = text || "[no text]";
+
+                return {
+                    href: link.href,
+                    title: title,
+                    text: text,
+                    id: link.id,
+                };
+            }
+            else {
+                return null;
+            }
+        };
+
+        Linkbox.prototype.getSelection = function () {
+            return (window.getSelection || document.getSelection).call();
+        };
+
+        /* links from selected text, or if none, all links in document. */
+        Linkbox.prototype.getLinks = function () {
+            var selection = this.getSelection();
+            var links = toArray(document.links);
+
+            if (selection.toString().trim().length > 0) {
+                links = links.filter(function (link) {
+                    return selection.containsNode(link, true);
+                });
+            }
+
+            links = links.map(this.linkInfo).filter(filterGeneric);
+
+            /* Remove duplicates */
+
+            var hrefs = links.map(curry(objectProperty)("href"));
+
+            links = links.reverse().filter(function (link, index) {
+                return hrefs.indexOf(link.href, index + 1) === -1;
+            }).reverse();
+
+            return links;
+        };
+
+        Linkbox.prototype.toggleContainerType = function () {
+            switch (this.containerType) {
+                case Linkbox.CONTAINER_TYPE_LIST: {
+                    this.setContainerType(Linkbox.CONTAINER_TYPE_TEXTAREA);
+                    break;
+                }
+                case Linkbox.CONTAINER_TYPE_TEXTAREA: {
+                    this.setContainerType(Linkbox.CONTAINER_TYPE_LIST);
+                    break;
+                }
+            }
+        };
+
+        Linkbox.prototype.setContainerType = function (containerType) {
+            switch (containerType) {
+                case Linkbox.CONTAINER_TYPE_LIST: {
+                    this.containerType = Linkbox.CONTAINER_TYPE_LIST;
+                    break;
+                }
+                case Linkbox.CONTAINER_TYPE_TEXTAREA: {
+                    this.containerType = Linkbox.CONTAINER_TYPE_TEXTAREA;
+                    break;
+                }
+            }
+
+            this.renderContainer();
+        };
+
+        Linkbox.prototype.toggleDisplayMode = function () {
+            switch (this.displayMode) {
+                case Linkbox.DISPLAY_MODE_TITLE: {
+                    this.setDisplayMode(Linkbox.DISPLAY_MODE_HREF);
+                    break;
+                }
+                case Linkbox.DISPLAY_MODE_HREF: {
+                    this.setDisplayMode(Linkbox.DISPLAY_MODE_TITLE);
+                    break;
+                }
+            }
+        };
+
+        Linkbox.prototype.setDisplayMode = function (displayMode) {
+            switch (displayMode) {
+                case Linkbox.DISPLAY_MODE_TITLE: {
+                    this.displayMode = Linkbox.DISPLAY_MODE_TITLE;
+                    break;
+                }
+                case Linkbox.DISPLAY_MODE_HREF: {
+                    this.displayMode = Linkbox.DISPLAY_MODE_HREF;
+                    break;
+                }
+            }
+
+            this.renderContainer();
+        };
+
+        Linkbox.prototype.renderContainer = function () {
+            switch (this.containerType) {
+                case Linkbox.CONTAINER_TYPE_LIST: {
+                    this.setContainerContent(this.createList());
+                    break;
+                }
+                case Linkbox.CONTAINER_TYPE_TEXTAREA: {
+                    this.setContainerContent(this.createTextarea());
+                    break;
+                }
+            }
+        };
+
+        Linkbox.prototype.setContainerContent = function (contentNode) {
+            removeChildren("#linkbox-container", this.iframeDocument);
+            this.iframeDocument.querySelector("#linkbox-container").appendChild(contentNode);
+        };
+
+        Linkbox.prototype.getLinkText = function () {
+            var toText;
+
+            switch (this.displayMode) {
+                case Linkbox.DISPLAY_MODE_TITLE: {
+                    toText = function (link) {
+                        return "- [" + link.title + "](" + link.href + ")";
+                    };
+                    break;
+                }
+                case Linkbox.DISPLAY_MODE_HREF: {
+                    toText = function (link) {
+                        return link.href;
+                    };
+                    break;
+                }
+            }
+
+            return this.links.map(toText).join("\n");
+        };
+
+        Linkbox.prototype.createTextarea = function () {
+            removeElement("#linkbox-textarea", this.iframeDocument);
+
+            return createElement("textarea", {
+                id: "linkbox-textarea",
+                text: this.getLinkText(),
+            }, this.iframeDocument);
+        };
+
+        Linkbox.prototype.linkToListItem = function (link) {
+            var anchor = createElement("a", {
+                href: link.href,
+                title: (link.text || link.href),
+            }, this.iframeDocument);
+
+            switch (this.displayMode) {
+                case Linkbox.DISPLAY_MODE_HREF: {
+                    anchor.textContent = anchor.href;
+                    break;
+                }
+                case Linkbox.DISPLAY_MODE_TITLE: {
+                    anchor.textContent = anchor.title;
+                    break;
+                }
+            }
+
+            return createElement("li", {
+                children: [anchor],
+            }, this.iframeDocument);
+        };
+
+        Linkbox.prototype.createList = function () {
+            removeElement("#linkbox-list", this.iframeDocument);
+
+            return createElement("ol", {
+                id: "linkbox-list",
+                children: this.links.map(this.linkToListItem.bind(this)),
+            }, this.iframeDocument);
+        };
+
+        Linkbox.prototype.openLinks = function () {
+            if (this.links.length < 10 || confirm("Open " + this.links.length + " links?")) {
+                this.links.forEach(function (link) {
+                    window.open(link.href, getRandom());
+                });
+            }
+        };
+
+        Linkbox.prototype.onIframeLoaded = function () {
+            var self = this;
+            var doc = this.iframeDocument = this.iframe.contentDocument;
+            doc.addEventListener("toggleDisplayMode", this.toggleDisplayMode.bind(this));
+            doc.addEventListener("toggleContainerType", this.toggleContainerType.bind(this));
+
+            createElement("style", {
+                type: "text/css",
+                text: Linkbox.IFRAME_DOCUMENT_CSS,
+                parent: doc.head,
+            }, doc);
+
+            createElement("p", {
+                id: "close-button",
+                html: "&times;",
+                events: {click: Linkbox.removeExistingIframes},
+                parent: doc.body,
+            }, doc);
+
+            createElement("button", {
+                text: "Toggle display mode (title <=> href)",
+                events: {click: this.toggleDisplayMode.bind(this)},
+                parent: createElement("div", {parent: doc.body}, doc),
+            }, doc);
+
+            createElement("button", {
+                text: "Toggle container type (list <=> textarea)",
+                events: {click: this.toggleContainerType.bind(this)},
+                parent: createElement("div", {parent: doc.body}, doc),
+            }, doc);
+
+            createElement("button", {
+                text: "Open all links",
+                events: {click: this.openLinks.bind(this)},
+                parent: createElement("div", {parent: doc.body}, doc),
+            }, doc);
+
+            createElement("div", {
+                id: "linkbox-container",
+                parent: doc.body,
+            }, doc);
+
+            this.renderContainer();
+        };
+
+        Linkbox.removeExistingIframes = function () {
+            removeElements("[id^='linkbox-iframe']", document);
+        };
+
+        Linkbox.onDocumentClick = function (event) {
+            var target = event.target;
+            if (!target.matches("[id^='linkbox-iframe'], [id^='linkbox-iframe'] *")) {
+                Linkbox.removeExistingIframes();
+            }
+        };
+
+        Linkbox.prototype.display = function () {
+            Linkbox.removeExistingIframes();
+            document.removeEventListener("click", Linkbox.onDocumentClick);
+            document.addEventListener("click", Linkbox.onDocumentClick);
+            this.setup();
+            var target = (document.querySelector("body") || document.documentElement);
+            target.appendChild(this.iframe);
+        };
+
+        return Linkbox;
     })();
 
-    /* No need to go any further... */
-    if (0 === links.length) {
-        window.alert('No links found.');
-        return null;
-    }
-
-    /* the iframe */
-    var iframe;
-
-    /* the iframe document */
-    var ifdoc;
-
-    /* display mode (title,href) */
-    var dm = 'href';
-
-    /* container type (list,textarea) */
-    var ct = 'list';
-
-    /* toggle the container type */
-    var togglect = function () {
-        ct = (ct === 'list') ? 'textarea' : 'list';
-        renderLinkContainer();
-    };
-
-    /* toggle the display mode */
-    var toggledm = function () {
-        dm = (dm === 'title') ? 'href' : 'title';
-        renderLinkContainer();
-    };
-
-    /*  */
-    var renderLinkContainer = function () {
-        setContainerContent((ct === 'textarea') ? createTextarea() : createList());
-    };
-
-    /*  */
-    var setContainerContent = function (node) {
-        emptyContainer();
-        ifdoc.getElementById('container').appendChild(node);
-    };
-
-    /*  */
-    var emptyContainer = function () {
-        var c = ifdoc.getElementById('container');
-        c && [].forEach.call(c.querySelectorAll('*'), function (node) {
-            node.parentNode.removeChild(node);
-        });
-    };
-
-    /*  */
-    var createTextarea = function () {
-        var ta = ifdoc.getElementById('lb_textarea');
-        ta && ta.parentNode.removeChild(ta);
-        ta = ifdoc.createElement('textarea');
-        ta.id = 'lb_textarea';
-        ta.textContent = '';
-        links.forEach(function (link) {
-            ta.textContent += (dm === 'href') ? link.href+'\n' : '- ['+link.title+']('+link.href+')\n';
-        });
-        return ta;
-    };
-
-    /*  */
-    var createList = function () {
-        var list = ifdoc.getElementById('linkbox_list');
-        list && list.parentNode.removeChild(list);
-        list = ifdoc.createElement('ol');
-        list.id = 'linkbox_list';
-        links.forEach(function (link) {
-            var li = ifdoc.createElement('li');
-            var a = ifdoc.createElement('a');
-            a.href = link.href;
-            a.title = link.text || link.href;
-            a.textContent = (dm === 'href') ? a.href : a.title;
-            li.appendChild(a);
-            list.appendChild(li);
-        });
-        return list;
-    };
-
-    /* CSS injected into the iframe document */
-    var ifdoccss = [
-        ['*',['box-sizing:border-box !important']],
-        ['body,html',['height:100%','width:100%','padding:0','margin:0']],
-        ['body', ['display:flex','flex-direction:column',
-            'overflow:scroll','white-space:nowrap','color:#900','padding:1em'
-        ]],
-        ['#xbtn',['color:#fee','background-color:#cd5c5c',
-            'display:inline-block','position:absolute','top:3px','right:3px',
-            'border:1px solid #fcc','border-radius:3px','padding:0 3px',
-            'font:700 14px/100% monospace','cursor:pointer',
-        ]],
-        ['button',['font:700 13px/115% sans-serif','text-align:left','cursor:pointer']],
-        ['ol',['font:normal 13px/115% monospace','margin-top:0']],
-        ['textarea',['width:100%']],
-        ['#container',['flex:1','display:flex','margin-top:0.5em']],
-    ].map(function (a) {return a[0]+' {'+a[1].join(';')+'}\n'}).join('');
-
-    /* CSS applied to the iframe in its parent document */
-    var ifcss = [
-        'display:block','position:fixed','top:10px','left:10px','height:90%',
-        'width:'+Math.max(parseInt(document.documentElement.clientWidth*0.65,10),600)+'px',
-        'border:3px double #000','border-radius:5px','background-color:#fff',
-        'padding:1em','margin:0','z-index:999999999','opacity:0.9',
-        'overflow-x:auto','overflow-y:auto','visibility:visible',
-        'white-space:nowrap','padding:0','margin:0',
-    ].join(' !important;')+' !important;';
-
-    /* inject the iframe, set ifdoc, and ... go! */
-    iframe = document.createElement('iframe');
-    iframe.id = 'linkbox_frame_' + Math.random().toString(36).substring(2);
-    iframe.style.cssText = ifcss;
-    iframe.addEventListener('load', function () {
-        ifdoc = iframe.contentDocument;
-        ifdoc.addEventListener('toggleDisplayMode', toggledm);
-        ifdoc.addEventListener('toggleContainerType', togglect);
-
-        var style = ifdoc.createElement('style');
-        style.type = 'text/css';
-        style.appendChild(ifdoc.createTextNode(ifdoccss));
-
-        var xbtn = ifdoc.createElement('div');
-        xbtn.id = 'xbtn';
-        xbtn.innerHTML = '&times';
-        xbtn.addEventListener('click', function (e) {
-            e.preventDefault();
-            iframe.parentNode.removeChild(iframe);
-        });
-
-        var div1 = ifdoc.createElement('div');
-        var div2 = ifdoc.createElement('div');
-        var div3 = ifdoc.createElement('div');
-        var btn1 = ifdoc.createElement('button');
-        var btn2 = ifdoc.createElement('button');
-        div3.id = 'container';
-        btn1.textContent = 'Toggle display mode (title <=> href)';
-        btn2.textContent = 'Toggle container type (list <=> textarea)';
-        btn1.addEventListener('click', toggledm);
-        btn2.addEventListener('click', togglect);
-        div1.appendChild(btn1);
-        div2.appendChild(btn2);
-        ifdoc.head.appendChild(style);
-        ifdoc.body.appendChild(xbtn);
-        ifdoc.body.appendChild(div1);
-        ifdoc.body.appendChild(div2);
-        ifdoc.body.appendChild(div3);
-
-        setContainerContent(createList());
-    });
-
-    (document.body||document.documentElement).appendChild(iframe);
+    new Linkbox().display();
 })();
